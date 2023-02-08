@@ -2,44 +2,25 @@ package main
 
 import (
 	"fmt"
-	"os"
+	"log"
 	"strings"
 
 	"golang.org/x/sys/windows/registry"
 )
 
 func main() {
-	batchMode := false
-
-	args := os.Args[1:]
-
-	if len(args) > 0 && (args[0] == "/help") {
-		fmt.Println("Writes all the currently installed versions of \"classic\" .NET platform in the system.\r\nUse --b, -b or /b to use in a batch, showing only the installed versions, without any extra informational lines.")
-	} else {
-		if len(args) > 0 && (args[0] == "/b") {
-			batchMode = true
-		}
-
-		if !batchMode {
-			fmt.Println("Currently installed \"classic\" .NET Versions in the system:")
-		}
-
-		Get45PlusFromRegistry()
-	}
-
-	if !batchMode {
-		fmt.Scanln()
-	}
+	// Get1To45VersionFromRegistry()
+	Get45PlusFromRegistry()
 }
 
 func WriteVersion(version string, spLevel string) {
-	version = strings.Trim(version, " \t\n\r")
-	if len(version) == 0 {
+	version = strings.TrimSpace(version)
+	if version == "" {
 		return
 	}
 
 	spLevelString := ""
-	if len(spLevelString) > 0 {
+	if spLevelString != "" {
 		spLevelString = " Service Pack " + spLevel
 	}
 
@@ -47,124 +28,105 @@ func WriteVersion(version string, spLevel string) {
 }
 
 func Get1To45VersionFromRegistry() {
-	const subkey string = "SOFTWARE\\Microsoft\\NET Framework Setup\\NDP\\"
+	const subkey = `SOFTWARE\Microsoft\NET Framework Setup\NDP\`
 
 	k, err := registry.OpenKey(registry.LOCAL_MACHINE, subkey, registry.READ)
 	if err != nil {
-		fmt.Println(err)
-
-		return
+		log.Fatalln(err)
 	}
-
 	defer k.Close()
 
 	keys, err := k.ReadSubKeyNames(-1)
 	if err != nil {
-		fmt.Println(err)
-
-		return
+		log.Fatalln(err)
 	}
 
 	for _, subkey1 := range keys {
 		if subkey1 == "v4" {
 			continue
 		}
+		if !strings.HasPrefix(subkey1, "v") {
+			continue
+		}
 
-		if strings.HasPrefix(subkey1, "v") {
-			versionKey, err := registry.OpenKey(registry.LOCAL_MACHINE, subkey+subkey1, registry.READ)
+		versionKey, err := registry.OpenKey(registry.LOCAL_MACHINE, subkey+subkey1, registry.READ)
+		if err != nil {
+			continue
+		}
+		defer versionKey.Close()
+
+		name, _, err := versionKey.GetStringValue("Version")
+		if err != nil {
+			name = ""
+		}
+
+		sp, _, err := versionKey.GetStringValue("SP")
+		if err != nil {
+			sp = ""
+		}
+
+		install, _, err := versionKey.GetStringValue("Install")
+		if err != nil || install == "" {
+			WriteVersion(name, sp)
+		} else if sp != "" && install == "1" {
+			WriteVersion(name, sp)
+		}
+
+		if name != "" {
+			continue
+		}
+
+		vers, err := versionKey.ReadSubKeyNames(-1)
+		if err != nil {
+			continue
+		}
+
+		for _, subkey2 := range vers {
+			subKeyVer, err := registry.OpenKey(registry.LOCAL_MACHINE, subkey+subkey1+"\\"+subkey2, registry.READ)
 			if err != nil {
 				continue
 			}
+			defer subKeyVer.Close()
 
-			defer versionKey.Close()
-
-			name, _, err := versionKey.GetStringValue("Version")
+			name, _, err := subKeyVer.GetStringValue("Version")
 			if err == nil {
-				name = ""
+				sp, _, err = subKeyVer.GetStringValue("SP")
 			}
 
-			sp, _, err := versionKey.GetStringValue("SP")
-			if err == nil {
-				sp = ""
-			}
-
-			install, _, err := versionKey.GetStringValue("Install")
-			if err == nil || len(install) < 1 {
+			install, _, err := subKeyVer.GetStringValue("Install")
+			if err != nil {
+				WriteVersion(name, "")
+			} else if sp != "" && install == "1" {
 				WriteVersion(name, sp)
-			} else {
-				if len(sp) > 0 && install == "1" {
-					WriteVersion(name, sp)
-				}
-			}
-
-			if len(name) > 0 {
-				continue
-			}
-
-			vers, err := versionKey.ReadSubKeyNames(-1)
-			if err == nil {
-				for _, subkey2 := range vers {
-					subKeyVer, err := registry.OpenKey(registry.LOCAL_MACHINE, subkey+subkey1+"\\"+subkey2, registry.READ)
-					if err != nil {
-						continue
-					}
-
-					defer subKeyVer.Close()
-
-					name, _, err := subKeyVer.GetStringValue("Version")
-
-					if err != nil {
-						sp, _, err = subKeyVer.GetStringValue("SP")
-
-						if err != nil {
-							fmt.Println(err)
-						}
-					}
-
-					install, _, err := subKeyVer.GetStringValue("Install")
-					if err != nil {
-						WriteVersion(name, sp)
-					} else {
-						if len(sp) > 0 && install == "1" {
-							WriteVersion(name, sp)
-						} else if install == "1" {
-							WriteVersion(name, "")
-						}
-					}
-				}
+			} else if install == "1" {
+				WriteVersion(name, "")
 			}
 		}
 	}
 }
 
 func Get45PlusFromRegistry() {
-	const subkey string = "SOFTWARE\\Microsoft\\NET Framework Setup\\NDP\\v4\\Full\\"
+	const subkey string = `SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full\`
 
 	k, err := registry.OpenKey(registry.LOCAL_MACHINE, subkey, registry.READ)
 	if err != nil {
-		fmt.Println(err)
-
-		return
+		log.Fatal(err)
 	}
-
 	defer k.Close()
 
 	val, _, err := k.GetStringValue("Version")
 
+	rel, _, err := k.GetIntegerValue("Release")
 	if err == nil {
-		WriteVersion(val, "")
+		WriteVersion(CheckFor45PlusVersion(int(rel)), "")
 	} else {
-		rel, _, err := k.GetIntegerValue("Release")
-
-		if err == nil {
-			WriteVersion(CheckFor45PlusVersion(int(rel)), "")
-		}
+		WriteVersion(val, "")
 	}
 }
 
 func CheckFor45PlusVersion(releaseKey int) string {
 	switch {
-	case releaseKey >= 533325:
+	case releaseKey >= 533320:
 		return "4.8.1"
 	case releaseKey >= 528040:
 		return "4.8"
